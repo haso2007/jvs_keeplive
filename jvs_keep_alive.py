@@ -15,11 +15,33 @@ import argparse
 import asyncio
 import json
 import logging
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from playwright.async_api import async_playwright
+
+def ensure_playwright():
+    """Auto-install playwright and chromium if missing."""
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        print("playwright not found, installing...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
+
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            p.chromium.executable_path
+    except Exception:
+        print("Chromium not found, installing...")
+        subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+
+
+ensure_playwright()
+
+from playwright.async_api import async_playwright  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = SCRIPT_DIR / "jvs_keep_alive.json"
