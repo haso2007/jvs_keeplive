@@ -1,6 +1,16 @@
 # JVS Keep Alive
 
-使用 Playwright 无头浏览器**常驻打开** JVS WebUI 聊天页面，让前端 JS 持续运行，维持 WebSocket 连接和 Token 自动刷新，避免关闭网页后 JWT 过期。
+包含两个脚本，配合使用保持 JVS 服务持续可用：
+
+1. **`jvs_keep_alive.py`**：Playwright 无头浏览器常驻打开 chat 页面，维持前端会话
+2. **`gateway_restart.py`**：定时重启 OpenClaw Gateway，防止 JWT 过期
+
+## 为什么需要两个脚本
+
+JVS 定制的 OpenClaw Gateway 的 JWT 有固定有效期，过期后不会自动刷新，只能重启 Gateway 获取新 token。因此：
+
+- `jvs_keep_alive.py` → 维持浏览器端会话
+- `gateway_restart.py` → 在 JVS 云桌面上定时重启 Gateway，确保 JWT 不过期
 
 ## 原理
 
@@ -8,10 +18,11 @@
 
 ## 文件说明
 
-- `jvs_keep_alive.py`：主脚本（Playwright 版）
-- `jvs_keep_alive.template.json`：配置模板
-- `jvs_keep_alive.json`：你的本地实际配置文件，不会提交到 Git
-- `jvs_keep_alive.log`：运行日志，不会提交到 Git
+- `jvs_keep_alive.py`：浏览器常驻脚本（Playwright 版）
+- `gateway_restart.py`：Gateway 定时重启脚本
+- `jvs_keep_alive.template.json`：浏览器脚本配置模板
+- `jvs_keep_alive.json`：本地配置文件，不会提交到 Git
+- `jvs_keep_alive.log`：浏览器脚本运行日志，不会提交到 Git
 - `Dockerfile`：Docker 镜像构建文件
 - `docker-compose.yml`：Docker Compose 编排文件
 
@@ -223,3 +234,69 @@ jvs_keep_alive.log
 
 - 不要把真实 `jvs_keep_alive.json` 提交到 GitHub
 - 不要公开分享你的 Cookie
+
+---
+
+## Gateway 定时重启脚本
+
+### 说明
+
+`gateway_restart.py` 在 JVS 云桌面上运行，每隔一定时间执行 `ocw gateway restart`，防止 JWT 过期。
+
+### 运行
+
+在 JVS 云桌面终端里执行：
+
+```bash
+python gateway_restart.py
+```
+
+默认每 **1 小时** 重启一次。可通过以下方式修改间隔：
+
+**方式一**：命令行参数（秒）
+
+```bash
+python gateway_restart.py --interval 1800    # 30 分钟
+python gateway_restart.py --interval 3600    # 1 小时
+python gateway_restart.py --interval 7200    # 2 小时
+```
+
+**方式二**：修改脚本里的默认值
+
+打开 `gateway_restart.py`，修改这一行：
+
+```python
+RESTART_INTERVAL_SECONDS = 3600  # 改成你需要的秒数
+```
+
+### 后台运行
+
+```bash
+nohup python gateway_restart.py > gateway_restart.log 2>&1 &
+echo $!  # 记下进程号
+```
+
+查看日志：
+
+```bash
+tail -f gateway_restart.log
+```
+
+停止：
+
+```bash
+kill <进程号>
+```
+
+### 运行效果
+
+```text
+OpenClaw Gateway Auto-Restart Started
+  Command:  ocw gateway restart
+  Interval: 3600s (1h)
+Next restart at: 2026-03-20 12:00:00
+--- Restart #1 ---
+[OK] Gateway restarted successfully
+Next restart at: 2026-03-20 13:00:00
+```
+
