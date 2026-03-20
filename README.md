@@ -1,10 +1,10 @@
 # JVS Keep Alive
 
-使用 Playwright 无头浏览器定时刷新 JVS WebUI 聊天页面，让前端 JS 正常执行，维持 WebSocket 连接和 Token 刷新，避免关闭网页后登录态失效。
+使用 Playwright 无头浏览器**常驻打开** JVS WebUI 聊天页面，让前端 JS 持续运行，维持 WebSocket 连接和 Token 自动刷新，避免关闭网页后 JWT 过期。
 
 ## 原理
 
-与简单的 HTTP 请求不同，本脚本启动一个真正的无头浏览器来加载页面，前端 JS 会正常运行，效果等同于你一直开着浏览器标签页。
+脚本启动一个真正的无头浏览器加载 chat 页面后**保持打开不关闭**，前端 JS 持续运行，效果等同于你一直开着浏览器标签页。脚本只做状态监控，不会刷新页面，确保 WebSocket 连接和前端心跳不被中断。
 
 ## 文件说明
 
@@ -48,7 +48,7 @@ docker compose logs -f
 docker compose down
 ```
 
-重新构建（脚本更新后）：
+重启（脚本更新后）：
 
 ```bash
 docker compose down && docker compose up -d
@@ -85,13 +85,13 @@ copy jvs_keep_alive.template.json jvs_keep_alive.json
 ```json
 {
   "cookies": "你的完整cookie字符串",
-  "interval": 600,
+  "check_interval": 60,
   "last_updated": ""
 }
 ```
 
 - `cookies`：从浏览器 **chat 会话页面请求** 中复制的完整 Cookie
-- `interval`：页面刷新间隔，单位秒，默认 `600`（10 分钟）
+- `check_interval`：状态检查间隔，单位秒，默认 `60`（1 分钟）。仅用于监控页面是否存活，不会刷新页面
 
 ## 运行
 
@@ -107,10 +107,10 @@ python jvs_keep_alive.py
 python jvs_keep_alive.py --headed
 ```
 
-指定刷新间隔：
+指定检查间隔：
 
 ```bash
-python jvs_keep_alive.py --interval 300
+python jvs_keep_alive.py --check-interval 120
 ```
 
 ## 后台长久运行
@@ -188,8 +188,9 @@ Unregister-ScheduledTask -TaskName "JVS_KeepAlive" -Confirm:$false
 
 ```text
 [OK] Page loaded - Title: JVS Claw
-[OK] Heartbeat #1 - Title: JVS Claw
-[OK] Heartbeat #2 - Title: JVS Claw
+[OK] Page will stay open, frontend JS keeps running
+[OK] Check #1 - Page alive - Title: JVS Claw
+[OK] Check #2 - Page alive - Title: JVS Claw
 ```
 
 如果出现 `Redirected to login` 则说明 Cookie 已失效，需要重新获取。
@@ -211,12 +212,12 @@ jvs_keep_alive.log
 3. 替换 `jvs_keep_alive.json` 中的 `cookies`
 4. 保存文件
 
-脚本会自动重载新配置，无需重启。
+脚本检测到配置变化后会自动加载新 Cookie 并重新打开页面，无需重启。
 
 ## 资源占用
 
 - 无头模式内存约 150-250MB（相当于一个 Chrome 标签页）
-- 页面空闲时 CPU 几乎为零
+- 页面常驻后 CPU 几乎为零
 
 ## 注意
 

@@ -2,13 +2,13 @@
 """
 JVS WebUI Keep-Alive Script (Playwright)
 
-Uses a headless Chromium browser to keep the JVS chat page alive,
+Uses a headless Chromium browser to keep the JVS chat page open permanently,
 so that frontend JS can maintain WebSocket connections and refresh tokens.
 
 Usage:
     python jvs_keep_alive.py
-    python jvs_keep_alive.py --interval 300
     python jvs_keep_alive.py --headed
+    python jvs_keep_alive.py --check-interval 60
 """
 
 import argparse
@@ -30,14 +30,13 @@ def ensure_playwright():
         print("")
         print("Options:")
         print("  1. Install Python 3.9+:  apt install python3.9  (or use pyenv)")
-        print("  2. Use Docker:  docker run -it python:3.11 bash")
+        print("  2. Use Docker:  docker compose up -d")
         sys.exit(1)
 
     try:
         import playwright  # noqa: F401
     except ImportError:
         print("playwright not found, installing...")
-        # Try multiple pip install methods
         pip_cmds = [
             [sys.executable, "-m", "pip", "install", "playwright"],
             ["pip3", "install", "playwright"],
@@ -119,16 +118,16 @@ def load_config_file():
         return json.load(f)
 
 
-def ensure_config_file(interval=600):
+def ensure_config_file(check_interval=60):
     if CONFIG_FILE.exists():
         return
-    save_config_file("", interval)
+    save_config_file("", check_interval)
 
 
-def save_config_file(cookies, interval):
+def save_config_file(cookies, check_interval):
     data = {
         "cookies": cookies,
-        "interval": interval,
+        "check_interval": check_interval,
         "last_updated": datetime.now().isoformat(),
     }
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -153,14 +152,15 @@ def parse_cookie_string(cookie_str):
     return cookies
 
 
-async def run_keep_alive(cookie_str, interval, headed):
+async def run_keep_alive(cookie_str, check_interval, headed):
     chat_url = f"{BASE_URL}/chat?currentWuyingServerId={SERVER_ID}"
 
     logger.info("=" * 55)
     logger.info("JVS WebUI Keep-Alive Started (Playwright)")
     logger.info(f"  Target:   {chat_url}")
-    logger.info(f"  Interval: {interval}s")
     logger.info(f"  Mode:     {'headed' if headed else 'headless'}")
+    logger.info(f"  Strategy: Keep page open permanently (no reload)")
+    logger.info(f"  Check:    Every {check_interval}s")
     logger.info(f"  Config:   {CONFIG_FILE}")
     logger.info("=" * 55)
 
@@ -183,13 +183,17 @@ async def run_keep_alive(cookie_str, interval, headed):
 
         page = await context.new_page()
 
-        # Navigate to chat page
+        # Monitor console messages from frontend JS
+        page.on("console", lambda msg: logger.debug(f"[Browser] {msg.text}"))
+
+        # Navigate to chat page and keep it open
         logger.info("Opening chat page...")
         try:
             resp = await page.goto(chat_url, wait_until="networkidle", timeout=60000)
             if resp and resp.status == 200:
                 title = await page.title()
                 logger.info(f"[OK] Page loaded - Title: {title}")
+                logger.info("[OK] Page will stay open, frontend JS keeps running")
             else:
                 status = resp.status if resp else "N/A"
                 logger.warning(f"[WARN] Page loaded with status: {status}")
@@ -199,16 +203,54 @@ async def run_keep_alive(cookie_str, interval, headed):
         except Exception as e:
             logger.error(f"[ERROR] Failed to load page: {e}")
 
-        # Keep alive loop
-        success_count = 0
-        fail_count = 0
+        # Status check loop - NO page reload, just monitor
+        check_count = 0
         config_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else None
 
         try:
             while True:
-                await asyncio.sleep(interval)
+                await asyncio.sleep(check_interval)
+                check_count += 1
 
-                # Check config file for updates
+                # Check if page is still alive
+                try:
+                    title = await page.title()
+                    current_url = page.url
+
+                    if "login" in current_url.lower():
+                        logger.error(
+                            f"[FAIL] Check #{check_count} - "
+                            f"Page redirected to login. Cookie expired."
+                        )
+                        logger.error(f"Please update cookie in {CONFIG_FILE}")
+                    else:
+                        logger.info(
+                            f"[OK] Check #{check_count} - "
+                            f"Page alive - Title: {title}"
+                        )
+
+                        # Save current browser cookies back to config
+                        browser_cookies = await context.cookies()
+                        cookie_parts = [
+                            f"{c['name']}={c['value']}" for c in browser_cookies
+                        ]
+                        save_config_file("; ".join(cookie_parts), check_interval)
+                        if CONFIG_FILE.exists():
+                            config_mtime = CONFIG_FILE.stat().st_mtime
+
+                except Exception as e:
+                    logger.error(f"[ERROR] Check #{check_count} - Page crashed: {e}")
+                    # Try to recover by reopening the page
+                    logger.info("Attempting to recover...")
+                    try:
+                        page = await context.new_page()
+                        await page.goto(chat_url, wait_until="networkidle", timeout=60000)
+                        title = await page.title()
+                        logger.info(f"[OK] Recovered - Title: {title}")
+                    except Exception as e2:
+                        logger.error(f"[ERROR] Recovery failed: {e2}")
+
+                # Check config file for cookie updates
                 if CONFIG_FILE.exists():
                     current_mtime = CONFIG_FILE.stat().st_mtime
                     if config_mtime is not None and current_mtime > config_mtime:
@@ -217,71 +259,29 @@ async def run_keep_alive(cookie_str, interval, headed):
                             config = load_config_file()
                             if config:
                                 new_cookie = (config.get("cookies") or "").strip()
-                                new_interval = config.get("interval", interval)
-                                if new_interval != interval:
-                                    interval = int(new_interval)
-                                    logger.info(f"Reloaded interval: {interval}s")
                                 if new_cookie and new_cookie != cookie_str:
                                     cookie_str = new_cookie
                                     await context.clear_cookies()
-                                    await context.add_cookies(parse_cookie_string(new_cookie))
-                                    logger.info("Reloaded new cookies from config")
+                                    await context.add_cookies(
+                                        parse_cookie_string(new_cookie)
+                                    )
+                                    logger.info("Reloaded new cookies, reopening page...")
+                                    await page.goto(
+                                        chat_url,
+                                        wait_until="networkidle",
+                                        timeout=60000,
+                                    )
+                                    title = await page.title()
+                                    logger.info(f"[OK] Page reopened - Title: {title}")
                         except Exception as e:
                             logger.warning(f"Failed to reload config: {e}")
-
-                # Reload the page to trigger frontend JS
-                try:
-                    resp = await page.reload(wait_until="networkidle", timeout=60000)
-                    if resp and resp.status == 200:
-                        success_count += 1
-                        fail_count = 0
-                        title = await page.title()
-                        logger.info(
-                            f"[OK] Heartbeat #{success_count} - "
-                            f"Title: {title}"
-                        )
-
-                        # Save current browser cookies back to config
-                        browser_cookies = await context.cookies()
-                        cookie_parts = [
-                            f"{c['name']}={c['value']}" for c in browser_cookies
-                        ]
-                        save_config_file("; ".join(cookie_parts), interval)
-                        if CONFIG_FILE.exists():
-                            config_mtime = CONFIG_FILE.stat().st_mtime
-                    else:
-                        fail_count += 1
-                        status = resp.status if resp else "N/A"
-                        url = page.url
-                        if "login" in url.lower():
-                            logger.error(
-                                f"[FAIL] Redirected to login. "
-                                f"Cookie expired. Failures: {fail_count}"
-                            )
-                        else:
-                            logger.warning(
-                                f"[WARN] Status: {status}. Failures: {fail_count}"
-                            )
-
-                except Exception as e:
-                    fail_count += 1
-                    logger.error(f"[ERROR] Reload failed: {e}. Failures: {fail_count}")
-
-                if fail_count >= 3:
-                    logger.error(
-                        f"{fail_count} consecutive failures. "
-                        f"Please update cookie in {CONFIG_FILE}"
-                    )
-                if fail_count >= 10:
-                    logger.error("Too many failures, stopping.")
-                    break
 
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
         finally:
             logger.info("=" * 55)
             logger.info("Keep-Alive Stopped")
-            logger.info(f"  Total heartbeats: {success_count}")
+            logger.info(f"  Total checks: {check_count}")
             logger.info("=" * 55)
             await browser.close()
 
@@ -289,10 +289,10 @@ async def run_keep_alive(cookie_str, interval, headed):
 def main():
     parser = argparse.ArgumentParser(description="JVS WebUI Keep-Alive (Playwright)")
     parser.add_argument(
-        "--interval",
+        "--check-interval",
         type=int,
         default=None,
-        help="Page reload interval in seconds (default: from config or 600)",
+        help="Status check interval in seconds (default: from config or 60)",
     )
     parser.add_argument(
         "--headed",
@@ -301,7 +301,7 @@ def main():
     )
     args = parser.parse_args()
 
-    ensure_config_file(600)
+    ensure_config_file(60)
     config = load_config_file()
     if not config or not (config.get("cookies") or "").strip():
         print("No cookie configured.")
@@ -309,11 +309,11 @@ def main():
         sys.exit(1)
 
     cookie_str = config["cookies"].strip()
-    interval = args.interval or int(config.get("interval", 600))
+    check_interval = args.check_interval or int(config.get("check_interval", config.get("interval", 60)))
 
     logger.info(f"Loaded config from {CONFIG_FILE}")
 
-    asyncio.run(run_keep_alive(cookie_str, interval, args.headed))
+    asyncio.run(run_keep_alive(cookie_str, check_interval, args.headed))
 
 
 if __name__ == "__main__":
