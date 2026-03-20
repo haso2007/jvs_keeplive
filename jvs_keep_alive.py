@@ -23,11 +23,41 @@ from pathlib import Path
 
 def ensure_playwright():
     """Auto-install playwright and chromium if missing."""
+    # Check Python version: playwright requires 3.9+
+    if sys.version_info < (3, 9):
+        print(f"Error: Python {sys.version_info.major}.{sys.version_info.minor} detected.")
+        print("Playwright requires Python 3.9 or higher.")
+        print("")
+        print("Options:")
+        print("  1. Install Python 3.9+:  apt install python3.9  (or use pyenv)")
+        print("  2. Use Docker:  docker run -it python:3.11 bash")
+        sys.exit(1)
+
     try:
         import playwright  # noqa: F401
     except ImportError:
         print("playwright not found, installing...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
+        # Try multiple pip install methods
+        pip_cmds = [
+            [sys.executable, "-m", "pip", "install", "playwright"],
+            ["pip3", "install", "playwright"],
+            ["pip", "install", "playwright"],
+        ]
+        installed = False
+        for cmd in pip_cmds:
+            try:
+                subprocess.check_call(cmd)
+                installed = True
+                break
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                continue
+        if not installed:
+            print("Error: Failed to install playwright.")
+            print("")
+            print("Please install manually:")
+            print("  pip3 install playwright")
+            print("  playwright install chromium")
+            sys.exit(1)
 
     try:
         from playwright.sync_api import sync_playwright
@@ -36,7 +66,24 @@ def ensure_playwright():
             p.chromium.executable_path
     except Exception:
         print("Chromium not found, installing...")
-        subprocess.check_call([sys.executable, "-m", "playwright", "install", "chromium"])
+        pw_cmds = [
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            ["playwright", "install", "chromium"],
+        ]
+        installed = False
+        for cmd in pw_cmds:
+            try:
+                subprocess.check_call(cmd)
+                installed = True
+                break
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                continue
+        if not installed:
+            print("Error: Failed to install Chromium.")
+            print("")
+            print("Please install manually:")
+            print("  playwright install chromium")
+            sys.exit(1)
 
 
 ensure_playwright()
