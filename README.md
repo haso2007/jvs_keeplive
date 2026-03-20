@@ -51,7 +51,7 @@ docker compose down
 重新构建（脚本更新后）：
 
 ```bash
-docker compose up -d --build
+docker compose down && docker compose up -d
 ```
 
 容器设置了 `restart: unless-stopped`，NAS / 服务器重启后会自动恢复运行。
