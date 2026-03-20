@@ -79,6 +79,75 @@ python jvs_keep_alive.py --headed
 python jvs_keep_alive.py --interval 300
 ```
 
+## 后台长久运行
+
+关闭终端窗口后脚本默认会被终止。以下方法可以让脚本在后台持续运行。
+
+### PowerShell
+
+后台运行，关闭窗口后仍继续：
+
+```powershell
+Start-Process -NoNewWindow -FilePath python -ArgumentList "jvs_keep_alive.py" -RedirectStandardOutput jvs_keep_alive_stdout.log -RedirectStandardError jvs_keep_alive_stderr.log
+```
+
+查看是否在运行：
+
+```powershell
+Get-Process python | Where-Object { $_.CommandLine -like '*jvs_keep_alive*' }
+```
+
+停止：
+
+```powershell
+Get-Process python | Where-Object { $_.CommandLine -like '*jvs_keep_alive*' } | Stop-Process
+```
+
+### Git Bash / WSL / Linux
+
+后台运行，关闭终端后仍继续：
+
+```bash
+nohup python jvs_keep_alive.py > /dev/null 2>&1 &
+echo $!  # 记下进程号
+```
+
+查看是否在运行：
+
+```bash
+ps aux | grep jvs_keep_alive
+```
+
+停止：
+
+```bash
+kill <进程号>
+```
+
+### Windows CMD
+
+后台运行：
+
+```bat
+start /b python jvs_keep_alive.py > nul 2>&1
+```
+
+如果希望关闭 CMD 窗口后仍运行，可以用计划任务或包装成 Windows 服务。
+
+### Windows 开机自启（计划任务）
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "python" -Argument "C:\path\to\jvs_keep_alive.py" -WorkingDirectory "C:\path\to"
+$trigger = New-ScheduledTaskTrigger -AtLogon
+Register-ScheduledTask -TaskName "JVS_KeepAlive" -Action $action -Trigger $trigger -Description "JVS WebUI Keep Alive"
+```
+
+删除计划任务：
+
+```powershell
+Unregister-ScheduledTask -TaskName "JVS_KeepAlive" -Confirm:$false
+```
+
 ## 如何确认是否有效
 
 运行后日志里应出现：
