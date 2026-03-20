@@ -11,10 +11,13 @@
 
 ## 使用前准备
 
-1. 登录 JVS WebUI
+1. 登录 JVS WebUI，并进入实际要保活的聊天页面，例如：
+   - `https://jvs.wuying.aliyun.com/chat?currentWuyingServerId=...`
 2. 打开浏览器开发者工具（F12）
-3. 在 `Network` 中点击任意请求
-4. 在 `Headers` 里复制完整 `Cookie` 值
+3. 在 `Network` 中找到这个 **chat 会话页面对应的请求**：
+   - 请求名通常类似 `chat?currentWuyingServerId=...`
+4. 点击该请求，在 `Headers` 中复制完整 `Cookie` 值
+5. 不要随便从其它无关页面复制 Cookie，优先使用 **chat 会话页面当前请求** 的 Cookie
 
 ## 配置
 
@@ -40,7 +43,7 @@ copy jvs_keep_alive.template.json jvs_keep_alive.json
 }
 ```
 
-- `cookies`：从浏览器复制的完整 Cookie
+- `cookies`：从浏览器 **chat 会话页面请求** 中复制的完整 Cookie
 - `interval`：请求间隔，单位秒，默认 `600`（10 分钟）
 
 ## 运行
