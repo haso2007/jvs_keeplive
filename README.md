@@ -84,9 +84,12 @@ python jvs_keep_alive.py --interval 300
 运行后日志里应出现：
 
 ```text
-[OK] Page loaded - Title: ...
-[OK] Heartbeat #1 - Title: ...
+[OK] Page loaded - Title: JVS Claw
+[OK] Heartbeat #1 - Title: JVS Claw
+[OK] Heartbeat #2 - Title: JVS Claw
 ```
+
+如果出现 `Redirected to login` 则说明 Cookie 已失效，需要重新获取。
 
 日志文件位于脚本同目录下：
 
