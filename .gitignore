@@ -2,5 +2,6 @@
 __pycache__/
 *.pyc
 jvs_keep_alive.json
+!jvs_keep_alive.template.json
 jvs_keep_alive.log
 jvs_test.py
