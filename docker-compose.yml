@@ -8,7 +8,7 @@ services:
       - ./jvs_keep_alive.py:/app/jvs_keep_alive.py:ro
       - ./jvs_keep_alive.json:/app/jvs_keep_alive.json
       - ./jvs_keep_alive.log:/app/jvs_keep_alive.log
-      - playwright_cache:/root/.cache/ms-playwright
+      - ./.playwright_cache:/root/.cache/ms-playwright
     environment:
       - TZ=Asia/Shanghai
     command: >
@@ -17,6 +17,3 @@ services:
         playwright install --with-deps chromium &&
         python jvs_keep_alive.py
       "
-
-volumes:
-  playwright_cache:
