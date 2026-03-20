@@ -17,3 +17,6 @@ services:
         playwright install --with-deps chromium &&
         python jvs_keep_alive.py
       "
+
+volumes:
+  playwright_cache:
