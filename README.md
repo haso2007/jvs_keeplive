@@ -12,15 +12,49 @@
 - `jvs_keep_alive.template.json`：配置模板
 - `jvs_keep_alive.json`：你的本地实际配置文件，不会提交到 Git
 - `jvs_keep_alive.log`：运行日志，不会提交到 Git
+- `Dockerfile`：Docker 镜像构建文件
+- `docker-compose.yml`：Docker Compose 编排文件
 
 ## 安装依赖
+
+### 方式一：直接运行（Python 3.9+）
 
 ```bash
 pip install playwright
 playwright install chromium
 ```
 
-`playwright install chromium` 会下载约 150MB 的 Chromium 浏览器。
+脚本首次运行时也会自动安装缺失的依赖。
+
+### 方式二：Docker（推荐用于 NAS / 服务器）
+
+适用于系统 Python 版本较低（如 3.8）或不想污染系统环境的场景。
+
+先完成下方「配置」步骤，再运行：
+
+```bash
+docker compose up -d
+```
+
+查看日志：
+
+```bash
+docker compose logs -f
+```
+
+停止：
+
+```bash
+docker compose down
+```
+
+重新构建（脚本更新后）：
+
+```bash
+docker compose up -d --build
+```
+
+容器设置了 `restart: unless-stopped`，NAS / 服务器重启后会自动恢复运行。
 
 ## 获取 Cookie
 

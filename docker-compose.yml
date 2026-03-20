@@ -1,0 +1,10 @@
+services:
+  jvs-keeplive:
+    build: .
+    container_name: jvs_keeplive
+    restart: unless-stopped
+    volumes:
+      - ./jvs_keep_alive.json:/app/jvs_keep_alive.json
+      - ./jvs_keep_alive.log:/app/jvs_keep_alive.log
+    environment:
+      - TZ=Asia/Shanghai
