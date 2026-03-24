@@ -1,6 +1,7 @@
 .claude/
 __pycache__/
 *.pyc
+.env
 modelscope_keep_alive.json
 !modelscope_keep_alive.template.json
 modelscope_keep_alive.log
