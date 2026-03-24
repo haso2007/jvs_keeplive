@@ -4,5 +4,11 @@ __pycache__/
 jvs_keep_alive.json
 !jvs_keep_alive.template.json
 jvs_keep_alive.log
+modelscope_keep_alive.json
+!modelscope_keep_alive.template.json
+modelscope_keep_alive.log
+modelscope_auth.json
+.tmp-pip/
+.pip-cache/
 jvs_test.py
 .playwright_cache/
