@@ -6,6 +6,7 @@ storage state for later reuse by `modelscope_keep_alive.py`.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -71,8 +72,23 @@ def ensure_playwright(browser_channel="chromium"):
             sys.exit(1)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-CONFIG_FILE = SCRIPT_DIR / "modelscope_keep_alive.json"
-DEFAULT_AUTH_FILE = SCRIPT_DIR / "modelscope_auth.json"
+
+
+def resolve_state_dir():
+    raw_value = os.environ.get("MODELSCOPE_STATE_DIR", "").strip()
+    if not raw_value:
+        return SCRIPT_DIR
+
+    candidate = Path(raw_value).expanduser()
+    if not candidate.is_absolute():
+        candidate = SCRIPT_DIR / candidate
+    return candidate.resolve()
+
+
+STATE_DIR = resolve_state_dir()
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_FILE = STATE_DIR / "modelscope_keep_alive.json"
+DEFAULT_AUTH_FILE = STATE_DIR / "modelscope_auth.json"
 DEFAULT_EDGE_USER_DATA_DIR = (
     Path.home() / "AppData" / "Local" / "Microsoft" / "Edge" / "User Data"
 )
@@ -113,13 +129,13 @@ def resolve_auth_file(auth_file_value=None):
     candidate = Path(raw_value)
     if candidate.is_absolute():
         return candidate
-    return SCRIPT_DIR / candidate
+    return STATE_DIR / candidate
 
 
 def auth_file_config_value(auth_file):
     auth_file = Path(auth_file)
     try:
-        return str(auth_file.relative_to(SCRIPT_DIR))
+        return str(auth_file.relative_to(STATE_DIR))
     except ValueError:
         return str(auth_file)
 
@@ -150,6 +166,21 @@ def normalize_browser_channel(browser_channel):
     if not value:
         return "msedge" if sys.platform == "win32" else "chromium"
     return value
+
+
+def build_browser_launch_args():
+    launch_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+    ]
+    if sys.platform.startswith("linux"):
+        launch_args.extend(
+            [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+            ]
+        )
+    return launch_args
 
 
 def resolve_user_data_dir(edge_user_data_dir):
@@ -208,7 +239,10 @@ def main():
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        launch_kwargs = {"headless": False}
+        launch_kwargs = {
+            "headless": False,
+            "args": build_browser_launch_args(),
+        }
         if browser_channel and browser_channel != "chromium":
             launch_kwargs["channel"] = browser_channel
 
@@ -223,7 +257,7 @@ def main():
 
         try:
             if using_existing_profile:
-                launch_args = []
+                launch_args = build_browser_launch_args()
                 if args.profile_directory:
                     launch_args.append(f"--profile-directory={args.profile_directory}")
                 context = p.chromium.launch_persistent_context(

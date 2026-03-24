@@ -1,0 +1,19 @@
+services:
+  modelscope-keep-alive:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: modelscope-keep-alive
+    restart: unless-stopped
+    init: true
+    shm_size: "1gb"
+    environment:
+      MODELSCOPE_STATE_DIR: /data
+      TZ: Asia/Shanghai
+    volumes:
+      - ./nas-data:/data
+    command:
+      - python
+      - modelscope_keep_alive.py
+      - --browser-channel
+      - chromium

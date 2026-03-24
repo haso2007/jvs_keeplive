@@ -5,6 +5,7 @@
 - `login_and_save.py`：首次手动登录并保存 Playwright 登录态
 - `modelscope_keep_alive.py`：复用登录态，持续访问并保活创空间页面
 - `modelscope_keep_alive.template.json`：配置模板
+- `Dockerfile`、`docker-compose.yml`：用于 Synology NAS / Docker 持久运行
 
 当前目标地址示例：
 
@@ -15,11 +16,11 @@ https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary
 ## 已验证的结论
 
 1. 私有创空间在未登录状态下通常会显示 `404 / sorry the page you visited does not exist`，这不是脚本崩溃，而是未授权访问。
-2. 最稳的流程是：先在自己的浏览器里登录，再运行 `login_and_save.py` 保存登录态，最后运行 `modelscope_keep_alive.py`。
+2. 最稳的流程是：先在你自己的浏览器里登录，再运行 `login_and_save.py` 保存登录态，最后运行 `modelscope_keep_alive.py`。
 3. 即使复用 Edge 的 `Profile 2`，只要浏览器是被 Playwright 驱动的，网站仍可能识别为自动化环境。
-4. 已实际观察到：页面可以正常显示“运行中”，但 noVNC 区域仍可能提示“无法连接到服务器”。
+4. 已实际观察到页面可显示“运行中”，但 noVNC 区域仍可能提示“无法连接到服务器”。
 5. 因此当前方案更接近“页面会话保活”，还不能证明一定能维持 noVNC 远程连接层的活跃状态。
-6. 是否真正能防止空间被回收，最终要以跨过平台空闲阈值后的实际结果为准。
+6. 是否真正能防止空间被回收，最终要看跨过平台空闲阈值后的实际结果。
 
 ## 文件说明
 
@@ -28,10 +29,11 @@ https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary
 - `modelscope_keep_alive.json`：本地配置文件，不提交到 Git
 - `modelscope_auth.json`：本地登录态文件，不提交到 Git
 - `modelscope_keep_alive.log`：运行日志，不提交到 Git
+- `nas-data/`：Docker 持久化目录，给 NAS 上的容器使用
 
 ## 安装依赖
 
-Python 3.9+：
+本机直接运行时需要：
 
 ```bash
 pip install playwright
@@ -72,7 +74,7 @@ copy modelscope_keep_alive.template.json modelscope_keep_alive.json
 - `target_url`：要保活的创空间地址
 - `check_interval`：检查间隔，单位秒，默认 `1800`，也就是 30 分钟
 - `auth_file`：登录态文件，默认 `modelscope_auth.json`
-- `browser_channel`：Windows 推荐 `msedge`，其他环境可用 `chromium`
+- `browser_channel`：Windows 推荐 `msedge`，Linux / Docker 推荐 `chromium`
 
 ## 推荐流程
 
@@ -92,9 +94,9 @@ python login_and_save.py --browser-channel chromium
 
 执行后：
 
-1. 在弹出的浏览器里手动登录 ModelScope
-2. 确认私有创空间页面已经可访问，不再是 `404`
-3. 回到终端按 Enter，保存登录态
+1. 在弹出的浏览器里手动登录 ModelScope。
+2. 确认私有创空间页面已经可访问，不再是 `404`。
+3. 回到终端按 Enter，保存登录态。
 
 ### 2. 尝试复用现有 Edge Profile
 
@@ -106,9 +108,9 @@ python login_and_save.py --browser-channel msedge --edge-user-data-dir "$env:LOC
 
 注意：
 
-- 必须先完全关闭所有 Edge 窗口和后台进程，否则用户目录被占用时会启动失败
-- 即便成功打开，也仍可能被站点识别为自动化浏览器
-- 已观察到页面可打开，但 noVNC 仍可能显示“无法连接到服务器”
+- 必须先完全关闭所有 Edge 窗口和后台进程，否则用户目录被占用时会启动失败。
+- 即便成功打开，也仍可能被站点识别为自动化浏览器。
+- 已观察到页面可打开，但 noVNC 仍可能显示“无法连接到服务器”。
 
 ## 运行保活
 
@@ -140,10 +142,10 @@ python modelscope_keep_alive.py --browser-channel chromium
 
 当前脚本行为：
 
-- 默认每 30 分钟检查一次
-- 巡检阶段不会每轮都重复点击 `运行` / `Open`
-- 如果检测到“长时间未激活 / 正在重新部署 / 休眠 / 待运行”等提示，会尝试重新激活
-- 首次打开页面时，如果页面上已经出现明显入口按钮，当前版本仍可能做一次激活尝试
+- 默认每 30 分钟检查一次。
+- 巡检阶段不会每轮都重复点击 `运行` / `Open`。
+- 如果检测到“长时间未激活 / 正在重新部署 / 休眠 / 待运行”等提示，会尝试重新激活。
+- 首次打开页面时，如果页面上已经出现明显入口按钮，当前版本仍可能做一次激活尝试。
 
 ## 后台运行
 
@@ -157,8 +159,6 @@ python modelscope_keep_alive.py
 
 ### Windows 真后台方式
 
-使用 `pythonw.exe` 启动时不会弹控制台窗口：
-
 ```powershell
 Start-Process -FilePath pythonw -ArgumentList "modelscope_keep_alive.py","--check-interval","1800" -WorkingDirectory "$PWD"
 ```
@@ -169,6 +169,56 @@ Start-Process -FilePath pythonw -ArgumentList "modelscope_keep_alive.py","--chec
 nohup python modelscope_keep_alive.py > /dev/null 2>&1 &
 echo $!
 ```
+
+## Synology NAS / Docker
+
+推荐做法是：
+
+1. 先在本机完成一次登录，拿到 `modelscope_auth.json`。
+2. 再把登录态和配置文件复制到 NAS 上的 `nas-data/` 目录。
+3. 最后由 Synology Container Manager 或 `docker compose` 长期运行。
+
+仓库里已经提供这些 Docker 文件：
+
+- `Dockerfile`
+- `docker-compose.yml`
+- `.dockerignore`
+
+容器运行时约定：
+
+- 容器内代码目录是 `/app`
+- 持久化状态目录是 `/data`
+- `MODELSCOPE_STATE_DIR=/data` 用来保存配置、登录态和日志
+- 容器启动时会强制使用 `chromium`，不会沿用 Windows 配置里的 `msedge`
+
+首次迁移到 NAS 时，把这两个文件复制到 `nas-data/`：
+
+- `nas-data/modelscope_keep_alive.json`
+- `nas-data/modelscope_auth.json`
+
+然后在 NAS 项目目录执行：
+
+```bash
+docker compose up -d --build
+```
+
+查看日志：
+
+```bash
+docker compose logs -f
+```
+
+停止：
+
+```bash
+docker compose down
+```
+
+说明：
+
+- `nas-data/modelscope_keep_alive.log` 会保留脚本运行日志。
+- 如果容器重建，只要 `nas-data/` 还在，登录态和配置就会继续复用。
+- 对于私有空间，通常不建议在 NAS 容器里跑 `login_and_save.py` 做首次登录，还是先在本机完成登录再迁移更稳。
 
 ## 如何确认是否仍在运行
 
@@ -210,9 +260,9 @@ Opening target page: https://www.modelscope.cn/studios/...
 
 ## 当前限制
 
-- 这个仓库现在解决的是“私有创空间页面层保活”
-- 还没有证明它能稳定维持 noVNC 远程连接层活跃
-- 如果后续实测仍然出现“长时间未激活，正在重新部署”，说明平台判定不只看页面访问，可能还依赖远程连接层
+- 这个仓库当前解决的是“私有创空间页面层保活”。
+- 还没有证明它能稳定维持 noVNC 远程连接层活跃。
+- 如果后续实测仍然出现“长时间未激活，正在重新部署”，说明平台判定不只看页面访问，可能还依赖远程连接层。
 
 ## 本地文件
 
@@ -221,5 +271,6 @@ Opening target page: https://www.modelscope.cn/studios/...
 - `modelscope_keep_alive.json`
 - `modelscope_auth.json`
 - `modelscope_keep_alive.log`
+- `nas-data/` 里的实际运行文件
 
 不要公开分享登录态文件或 Cookie。

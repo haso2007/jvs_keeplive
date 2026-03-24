@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -87,9 +88,24 @@ PlaywrightTimeoutError = TimeoutError
 async_playwright = None
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-CONFIG_FILE = SCRIPT_DIR / "modelscope_keep_alive.json"
-LOG_FILE = SCRIPT_DIR / "modelscope_keep_alive.log"
-DEFAULT_AUTH_FILE = SCRIPT_DIR / "modelscope_auth.json"
+
+
+def resolve_state_dir():
+    raw_value = os.environ.get("MODELSCOPE_STATE_DIR", "").strip()
+    if not raw_value:
+        return SCRIPT_DIR
+
+    candidate = Path(raw_value).expanduser()
+    if not candidate.is_absolute():
+        candidate = SCRIPT_DIR / candidate
+    return candidate.resolve()
+
+
+STATE_DIR = resolve_state_dir()
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_FILE = STATE_DIR / "modelscope_keep_alive.json"
+LOG_FILE = STATE_DIR / "modelscope_keep_alive.log"
+DEFAULT_AUTH_FILE = STATE_DIR / "modelscope_auth.json"
 DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary"
 DEFAULT_CHECK_INTERVAL = 1800
 ACTIVATION_RETRY_COOLDOWN_SECONDS = 300
@@ -256,13 +272,13 @@ def resolve_auth_file(auth_file_value=None):
     candidate = Path(raw_value)
     if candidate.is_absolute():
         return candidate
-    return SCRIPT_DIR / candidate
+    return STATE_DIR / candidate
 
 
 def auth_file_config_value(auth_file):
     auth_file = Path(auth_file)
     try:
-        return str(auth_file.relative_to(SCRIPT_DIR))
+        return str(auth_file.relative_to(STATE_DIR))
     except ValueError:
         return str(auth_file)
 
@@ -297,6 +313,21 @@ def normalize_browser_channel(browser_channel):
     if not value:
         return "msedge" if sys.platform == "win32" else "chromium"
     return value
+
+
+def build_browser_launch_args():
+    launch_args = [
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+    ]
+    if sys.platform.startswith("linux"):
+        launch_args.extend(
+            [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+            ]
+        )
+    return launch_args
 
 
 def parse_cookie_string(cookie_str):
@@ -645,10 +676,7 @@ async def run_keep_alive(
     async with async_playwright() as p:
         launch_kwargs = {
             "headless": not headed,
-            "args": [
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-            ],
+            "args": build_browser_launch_args(),
         }
         if browser_channel and browser_channel != "chromium":
             launch_kwargs["channel"] = browser_channel

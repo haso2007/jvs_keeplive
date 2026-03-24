@@ -8,3 +8,5 @@ modelscope_auth.json
 .tmp-pip/
 .pip-cache/
 .playwright_cache/
+nas-data/*
+!nas-data/.gitkeep
