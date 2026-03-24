@@ -1,17 +1,6 @@
 services:
   modelscope-keep-alive:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-}
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
-        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
-        PLAYWRIGHT_DOWNLOAD_HOST: ${PLAYWRIGHT_DOWNLOAD_HOST:-}
-        PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST: ${PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST:-}
-        PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: ${PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT:-180000}
+    image: jvs_keeplive-modelscope-keep-alive
     container_name: modelscope-keep-alive
     restart: unless-stopped
     init: true
