@@ -77,7 +77,7 @@ DEFAULT_EDGE_USER_DATA_DIR = (
     Path.home() / "AppData" / "Local" / "Microsoft" / "Edge" / "User Data"
 )
 DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary"
-DEFAULT_CHECK_INTERVAL = 180
+DEFAULT_CHECK_INTERVAL = 1800
 COOKIE_DOMAIN = ".modelscope.cn"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -104,7 +104,7 @@ def default_config():
 def load_config_file():
     if not CONFIG_FILE.exists():
         return None
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 

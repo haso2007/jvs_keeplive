@@ -91,7 +91,8 @@ CONFIG_FILE = SCRIPT_DIR / "modelscope_keep_alive.json"
 LOG_FILE = SCRIPT_DIR / "modelscope_keep_alive.log"
 DEFAULT_AUTH_FILE = SCRIPT_DIR / "modelscope_auth.json"
 DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary"
-DEFAULT_CHECK_INTERVAL = 180
+DEFAULT_CHECK_INTERVAL = 1800
+ACTIVATION_RETRY_COOLDOWN_SECONDS = 300
 COOKIE_DOMAIN = ".modelscope.cn"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -154,6 +155,52 @@ NOT_FOUND_TEXT_KEYWORDS = [
     "sorry the page you visited does not exist",
     "page does not exist",
 ]
+ACTIVATION_HINT_TEXT_KEYWORDS = [
+    "长时间未激活",
+    "创空间长时间未激活",
+    "正在为您重新部署",
+    "预计10分钟内完成",
+    "重新部署",
+    "部署中",
+    "启动中",
+    "创建空间",
+    "空间准备中",
+    "正在启动",
+    "已停止",
+    "已休眠",
+    "休眠",
+    "待运行",
+]
+ACTIVATION_ENTRY_TEXTS = [
+    "在线体验",
+    "开始体验",
+    "进入应用",
+    "打开应用",
+    "启动",
+    "运行",
+    "唤醒",
+    "继续",
+    "恢复",
+    "重新连接",
+    "Preview",
+    "Experience",
+    "Launch",
+    "Open",
+    "Start",
+    "Run",
+    "Wake up",
+    "Resume",
+    "Reconnect",
+    "Continue",
+]
+ACTIVATION_ONLY_ENTRY_TEXTS = {
+    "唤醒",
+    "恢复",
+    "重新连接",
+    "Wake up",
+    "Resume",
+    "Reconnect",
+}
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -200,7 +247,7 @@ def default_config(target_url=DEFAULT_URL, check_interval=DEFAULT_CHECK_INTERVAL
 def load_config_file():
     if not CONFIG_FILE.exists():
         return None
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
         return json.load(f)
 
 
@@ -245,6 +292,13 @@ def ensure_config_file(target_url=DEFAULT_URL, check_interval=DEFAULT_CHECK_INTE
     )
 
 
+def normalize_browser_channel(browser_channel):
+    value = (browser_channel or "").strip()
+    if not value:
+        return "msedge" if sys.platform == "win32" else "chromium"
+    return value
+
+
 def parse_cookie_string(cookie_str):
     """Parse 'k1=v1; k2=v2' into Playwright cookie dicts."""
     cookies = []
@@ -287,13 +341,17 @@ def iter_scopes(page):
         yield (label, frame)
 
 
-async def try_click_text(scope, label, text):
+def build_text_locators(scope, text):
     pattern = re.compile(re.escape(text), re.IGNORECASE)
-    candidates = [
+    return [
         scope.get_by_role("button", name=pattern),
         scope.locator("a, button, [role='button']").filter(has_text=pattern),
         scope.get_by_text(pattern),
     ]
+
+
+async def try_click_text(scope, label, text):
+    candidates = build_text_locators(scope, text)
 
     for locator in candidates:
         try:
@@ -315,12 +373,46 @@ async def try_click_text(scope, label, text):
     return False
 
 
-async def try_click_common_texts(page, texts):
-    clicked = False
+async def find_visible_action_texts(page, texts, max_matches=5):
+    matches = []
     for label, scope in iter_scopes(page):
         for text in texts:
+            if text in matches:
+                continue
+            for locator in build_text_locators(scope, text):
+                try:
+                    count = await locator.count()
+                except PlaywrightError:
+                    continue
+
+                for idx in range(min(count, 3)):
+                    item = locator.nth(idx)
+                    try:
+                        if await item.is_visible():
+                            matches.append(text)
+                            break
+                    except PlaywrightError:
+                        continue
+
+                if text in matches:
+                    break
+
+            if len(matches) >= max_matches:
+                return matches
+
+    return matches
+
+
+async def try_click_common_texts(page, texts, max_clicks=None):
+    clicked = False
+    click_count = 0
+    for label, scope in iter_scopes(page):
+        for text in texts:
+            if max_clicks is not None and click_count >= max_clicks:
+                return clicked
             if await try_click_text(scope, label, text):
                 clicked = True
+                click_count += 1
                 await asyncio.sleep(1)
     return clicked
 
@@ -336,6 +428,7 @@ async def detect_page_flags(page):
     url_lower = page.url.lower()
     body_text = await get_body_text(page)
     body_lower = body_text.lower()
+    visible_entry_controls = await find_visible_action_texts(page, ACTIVATION_ENTRY_TEXTS)
 
     login_page = any(keyword in url_lower for keyword in LOGIN_URL_KEYWORDS)
     if not login_page:
@@ -347,9 +440,21 @@ async def detect_page_flags(page):
     elif "404" in body_lower and "回到首页" in body_text:
         not_found_page = True
 
+    activation_hints = [
+        keyword for keyword in ACTIVATION_HINT_TEXT_KEYWORDS if keyword.lower() in body_lower
+    ]
+    activation_needed = bool(activation_hints)
+    if not activation_needed:
+        activation_needed = any(
+            text in ACTIVATION_ONLY_ENTRY_TEXTS for text in visible_entry_controls
+        )
+
     return {
         "login_page": login_page,
         "not_found_page": not_found_page,
+        "activation_needed": activation_needed,
+        "activation_hints": activation_hints,
+        "entry_controls": visible_entry_controls,
         "body_excerpt": body_text[:300].replace("\n", " | "),
     }
 
@@ -407,11 +512,55 @@ async def open_target(page, target_url):
     logger.info(f"Opening target page: {target_url}")
     response = await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
     await maybe_wait_for_network_idle(page)
-    await try_click_common_texts(page, TAB_TEXTS)
-    await try_click_common_texts(page, ENTRY_TEXTS)
-    await try_click_common_texts(page, DISMISS_TEXTS)
+    await try_click_common_texts(page, TAB_TEXTS, max_clicks=1)
+    await try_click_common_texts(page, DISMISS_TEXTS, max_clicks=2)
     await maybe_wait_for_network_idle(page, timeout_ms=5000)
     return response
+
+
+async def maybe_activate_space(page, page_flags, reason, force=False):
+    should_activate = force or page_flags["activation_needed"]
+    if not should_activate:
+        return False
+
+    if page_flags["activation_hints"]:
+        logger.info(
+            f"Activation required ({reason}) - hints: {', '.join(page_flags['activation_hints'])}"
+        )
+    elif page_flags["entry_controls"]:
+        logger.info(
+            f"Activation attempt ({reason}) - visible controls: {', '.join(page_flags['entry_controls'])}"
+        )
+    else:
+        logger.info(f"Activation attempt ({reason}) - trying common entry controls")
+
+    await try_click_common_texts(page, TAB_TEXTS, max_clicks=1)
+    clicked = await try_click_common_texts(page, ENTRY_TEXTS, max_clicks=2)
+    if clicked:
+        await try_click_common_texts(page, DISMISS_TEXTS, max_clicks=2)
+        await maybe_wait_for_network_idle(page, timeout_ms=10000)
+    return clicked
+
+
+async def open_and_prepare(page, target_url, activation_reason, force_initial_activation=False):
+    response = await open_target(page, target_url)
+    title, ready_state = await capture_state(page)
+    page_flags = await detect_page_flags(page)
+    activation_clicked = False
+
+    if not page_flags["login_page"] and not page_flags["not_found_page"]:
+        should_force_activate = force_initial_activation and bool(page_flags["entry_controls"])
+        activation_clicked = await maybe_activate_space(
+            page,
+            page_flags,
+            activation_reason,
+            force=should_force_activate,
+        )
+        if activation_clicked:
+            title, ready_state = await capture_state(page)
+            page_flags = await detect_page_flags(page)
+
+    return response, title, ready_state, page_flags, activation_clicked
 
 
 async def create_context(browser, cookie_str, auth_file):
@@ -509,14 +658,21 @@ async def run_keep_alive(
         config_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else None
         auth_mtime = auth_file.stat().st_mtime if auth_file.exists() else None
         check_count = 0
+        last_activation_attempt_at = None
 
         try:
-            response = await open_target(page, target_url)
+            response, title, ready_state, page_flags, activation_clicked = await open_and_prepare(
+                page,
+                target_url,
+                activation_reason="initial open",
+                force_initial_activation=True,
+            )
             if response:
                 logger.info(f"[OK] Initial response status: {response.status}")
 
-            title, ready_state = await capture_state(page)
-            page_flags = await detect_page_flags(page)
+            if activation_clicked:
+                last_activation_attempt_at = asyncio.get_running_loop().time()
+
             logger.info(f"[OK] Page loaded - Title: {title}")
             logger.info(f"[OK] Ready state: {ready_state}")
 
@@ -545,11 +701,35 @@ async def run_keep_alive(
 
                 try:
                     await keep_page_active(page, check_count)
-                    await try_click_common_texts(page, ENTRY_TEXTS)
-                    await try_click_common_texts(page, DISMISS_TEXTS)
 
                     title, ready_state = await capture_state(page)
                     page_flags = await detect_page_flags(page)
+                    now = asyncio.get_running_loop().time()
+
+                    if page_flags["activation_needed"]:
+                        can_retry_activation = (
+                            last_activation_attempt_at is None
+                            or now - last_activation_attempt_at
+                            >= ACTIVATION_RETRY_COOLDOWN_SECONDS
+                        )
+                        if can_retry_activation:
+                            activation_clicked = await maybe_activate_space(
+                                page,
+                                page_flags,
+                                reason=f"check #{check_count}",
+                            )
+                            if activation_clicked:
+                                last_activation_attempt_at = now
+                                title, ready_state = await capture_state(page)
+                                page_flags = await detect_page_flags(page)
+                        else:
+                            remaining = int(
+                                ACTIVATION_RETRY_COOLDOWN_SECONDS
+                                - (now - last_activation_attempt_at)
+                            )
+                            logger.info(
+                                f"Activation still pending; next retry in about {max(1, remaining)}s"
+                            )
 
                     if page_flags["login_page"]:
                         logger.error(
@@ -574,7 +754,20 @@ async def run_keep_alive(
                     logger.info("Attempting to recover by reopening the target page...")
                     await close_session(context, page)
                     context, page = await open_session(browser, cookie_str, auth_file)
-                    await open_target(page, target_url)
+                    (
+                        _,
+                        _title,
+                        _ready_state,
+                        _page_flags,
+                        activation_clicked,
+                    ) = await open_and_prepare(
+                        page,
+                        target_url,
+                        activation_reason=f"recovery #{check_count}",
+                        force_initial_activation=True,
+                    )
+                    if activation_clicked:
+                        last_activation_attempt_at = asyncio.get_running_loop().time()
 
                 if CONFIG_FILE.exists():
                     current_mtime = CONFIG_FILE.stat().st_mtime
@@ -626,7 +819,18 @@ async def run_keep_alive(
                                 context, page = await open_session(
                                     browser, cookie_str, auth_file
                                 )
-                                await open_target(page, target_url)
+                                (
+                                    _,
+                                    _title,
+                                    _ready_state,
+                                    _page_flags,
+                                    activation_clicked,
+                                ) = await open_and_prepare(
+                                    page,
+                                    target_url,
+                                    activation_reason="config reload",
+                                    force_initial_activation=True,
+                                )
                                 await persist_session_state(
                                     context,
                                     target_url,
@@ -634,6 +838,10 @@ async def run_keep_alive(
                                     auth_file,
                                     browser_channel,
                                 )
+                                if activation_clicked:
+                                    last_activation_attempt_at = (
+                                        asyncio.get_running_loop().time()
+                                    )
                                 auth_mtime = (
                                     auth_file.stat().st_mtime
                                     if auth_file.exists()
@@ -652,7 +860,20 @@ async def run_keep_alive(
                     auth_mtime = current_auth_mtime
                     await close_session(context, page)
                     context, page = await open_session(browser, cookie_str, auth_file)
-                    await open_target(page, target_url)
+                    (
+                        _,
+                        _title,
+                        _ready_state,
+                        _page_flags,
+                        activation_clicked,
+                    ) = await open_and_prepare(
+                        page,
+                        target_url,
+                        activation_reason="auth refresh",
+                        force_initial_activation=True,
+                    )
+                    if activation_clicked:
+                        last_activation_attempt_at = asyncio.get_running_loop().time()
 
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
@@ -734,8 +955,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-def normalize_browser_channel(browser_channel):
-    value = (browser_channel or "").strip()
-    if not value:
-        return "msedge" if sys.platform == "win32" else "chromium"
-    return value
