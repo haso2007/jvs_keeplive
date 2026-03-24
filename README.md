@@ -24,7 +24,7 @@ https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary
 
 ## 文件说明
 
-- `login_and_save.py`：打开浏览器，手动登录后保存 `modelscope_auth.json`
+- `login_and_save.py`：打开浏览器，手动登录后保存 `modelscope_auth.json`；如需复用现有 Edge 的代理等配置，建议先用该 Profile 打开目标站点确认可访问，再关闭 Edge 后让脚本接管同一个 Profile
 - `modelscope_keep_alive.py`：周期性访问页面并做轻量保活
 - `modelscope_keep_alive.json`：本地配置文件，不提交到 Git
 - `modelscope_auth.json`：本地登录态文件，不提交到 Git
@@ -100,7 +100,60 @@ python login_and_save.py --browser-channel chromium
 
 ### 2. 尝试复用现有 Edge Profile
 
-如果要显式复用现有 Edge Profile，例如 `Profile 2`：
+如果你希望尽量沿用当前 Edge Profile 里的代理、浏览器设置、扩展或已有登录环境，推荐按下面顺序操作：
+
+1. 先用你平时在用的 Edge Profile（例如 `Default` 或 `Profile 2`）手动打开目标创空间地址，确认页面在这个 Profile 下本身就能正常访问。
+2. 确认访问正常后，完全关闭所有 Edge 窗口和后台进程。
+3. 再运行 `login_and_save.py`，让 Playwright 复用同一个 User Data Dir 和 Profile Directory。
+
+如果当前使用的是默认 Profile `Default`：
+
+```powershell
+python login_and_save.py --browser-channel msedge --edge-user-data-dir "$env:LOCALAPPDATA\Microsoft\Edge\User Data" --profile-directory "Default"
+```
+
+如果你不确定自己在用哪个 Profile，可以先查出真实的 Profile 目录名，再把它原样填进 `--profile-directory`。
+
+方法 1：直接列出本机 Edge 的 Profile 目录
+
+```powershell
+Get-ChildItem "$env:LOCALAPPDATA\Microsoft\Edge\User Data" -Directory |
+  Where-Object { $_.Name -eq "Default" -or $_.Name -like "Profile *" } |
+  Select-Object -ExpandProperty Name
+```
+
+常见输出可能是：
+
+```text
+Default
+Profile 1
+Profile 2
+Profile 3
+```
+
+这时命令里的 `--profile-directory` 就填写上面显示的目录名本身，而不是 Edge 界面上显示的昵称。例如如果目录名是 `Profile 3`，就写：
+
+```powershell
+python login_and_save.py --browser-channel msedge --edge-user-data-dir "$env:LOCALAPPDATA\Microsoft\Edge\User Data" --profile-directory "Profile 3"
+```
+
+方法 2：直接在 Edge 里确认当前窗口对应的 Profile 路径
+
+1. 用你想复用的那个 Edge Profile 打开 `edge://version`
+2. 找到 `Profile path`
+3. 看路径最后一级目录名，例如：
+
+```text
+C:\Users\Dell\AppData\Local\Microsoft\Edge\User Data\Profile 2
+```
+
+上面这个例子里，应该写入命令的是：
+
+```powershell
+--profile-directory "Profile 2"
+```
+
+如果要显式复用其他 Edge Profile，例如 `Profile 2`：
 
 ```powershell
 python login_and_save.py --browser-channel msedge --edge-user-data-dir "$env:LOCALAPPDATA\Microsoft\Edge\User Data" --profile-directory "Profile 2"
@@ -109,6 +162,8 @@ python login_and_save.py --browser-channel msedge --edge-user-data-dir "$env:LOC
 注意：
 
 - 必须先完全关闭所有 Edge 窗口和后台进程，否则用户目录被占用时会启动失败。
+- Edge 界面里显示的“个人 / 工作 / 某某账号”这类名称，不一定等于磁盘目录名；命令里要以实际目录名为准，比如 `Default`、`Profile 1`、`Profile 2`。
+- 这里是“复用同一个 Profile 目录”，不是新建一个干净浏览器；这样更容易沿用该 Profile 已有的代理和浏览器侧配置。
 - 即便成功打开，也仍可能被站点识别为自动化浏览器。
 - 已观察到页面可打开，但 noVNC 仍可能显示“无法连接到服务器”。
 

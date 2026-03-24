@@ -241,7 +241,6 @@ def main():
     with sync_playwright() as p:
         launch_kwargs = {
             "headless": False,
-            "args": build_browser_launch_args(),
         }
         if browser_channel and browser_channel != "chromium":
             launch_kwargs["channel"] = browser_channel
@@ -269,7 +268,10 @@ def main():
                 browser = None
                 page = context.pages[0] if context.pages else context.new_page()
             else:
-                browser = p.chromium.launch(**launch_kwargs)
+                browser = p.chromium.launch(
+                    args=build_browser_launch_args(),
+                    **launch_kwargs,
+                )
                 if auth_file.exists():
                     context_kwargs["storage_state"] = str(auth_file)
                 context = browser.new_context(**context_kwargs)
