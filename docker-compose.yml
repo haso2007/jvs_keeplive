@@ -16,6 +16,7 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - ./nas-data:/data
+      - ./modelscope_keep_alive.py:/app/modelscope_keep_alive.py:ro
     command:
       - python
       - modelscope_keep_alive.py
