@@ -2,6 +2,7 @@
   "target_url": "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary",
   "cookies": "",
   "check_interval": 1800,
+  "browser_recycle_seconds": 43200,
   "auth_file": "modelscope_auth.json",
   "browser_channel": "msedge",
   "last_updated": ""

@@ -23,6 +23,11 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 
 def ensure_playwright(browser_channel="chromium"):
     """Auto-install Playwright and Chromium if missing."""
@@ -108,6 +113,8 @@ LOG_FILE = STATE_DIR / "modelscope_keep_alive.log"
 DEFAULT_AUTH_FILE = STATE_DIR / "modelscope_auth.json"
 DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary"
 DEFAULT_CHECK_INTERVAL = 1800
+DEFAULT_BROWSER_RECYCLE_SECONDS = 43200
+STATE_PERSIST_EVERY_CHECKS = 12
 ACTIVATION_RETRY_COOLDOWN_SECONDS = 300
 COOKIE_DOMAIN = ".modelscope.cn"
 USER_AGENT = (
@@ -249,11 +256,16 @@ def bootstrap_playwright(browser_channel):
     async_playwright = _async_playwright
 
 
-def default_config(target_url=DEFAULT_URL, check_interval=DEFAULT_CHECK_INTERVAL):
+def default_config(
+    target_url=DEFAULT_URL,
+    check_interval=DEFAULT_CHECK_INTERVAL,
+    browser_recycle_seconds=DEFAULT_BROWSER_RECYCLE_SECONDS,
+):
     return {
         "target_url": target_url,
         "cookies": "",
         "check_interval": check_interval,
+        "browser_recycle_seconds": browser_recycle_seconds,
         "auth_file": DEFAULT_AUTH_FILE.name,
         "browser_channel": "msedge" if sys.platform == "win32" else "chromium",
         "last_updated": "",
@@ -283,11 +295,19 @@ def auth_file_config_value(auth_file):
         return str(auth_file)
 
 
-def save_config_file(cookies, target_url, check_interval, auth_file, browser_channel):
+def save_config_file(
+    cookies,
+    target_url,
+    check_interval,
+    browser_recycle_seconds,
+    auth_file,
+    browser_channel,
+):
     data = {
         "target_url": target_url,
         "cookies": cookies,
         "check_interval": check_interval,
+        "browser_recycle_seconds": browser_recycle_seconds,
         "auth_file": auth_file_config_value(auth_file),
         "browser_channel": browser_channel,
         "last_updated": datetime.now().isoformat(),
@@ -296,13 +316,18 @@ def save_config_file(cookies, target_url, check_interval, auth_file, browser_cha
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def ensure_config_file(target_url=DEFAULT_URL, check_interval=DEFAULT_CHECK_INTERVAL):
+def ensure_config_file(
+    target_url=DEFAULT_URL,
+    check_interval=DEFAULT_CHECK_INTERVAL,
+    browser_recycle_seconds=DEFAULT_BROWSER_RECYCLE_SECONDS,
+):
     if CONFIG_FILE.exists():
         return
     save_config_file(
         "",
         target_url,
         check_interval,
+        browser_recycle_seconds,
         DEFAULT_AUTH_FILE,
         "msedge" if sys.platform == "win32" else "chromium",
     )
@@ -627,18 +652,83 @@ async def open_session(browser, cookie_str, auth_file):
 
 
 async def close_session(context, page):
+    if page is not None:
+        try:
+            await page.close()
+        except Exception as exc:
+            logger.warning(f"Failed to close page cleanly: {exc}")
+    if context is not None:
+        try:
+            await context.close()
+        except Exception as exc:
+            logger.warning(f"Failed to close browser context cleanly: {exc}")
+
+
+def format_megabytes(num_bytes):
+    return f"{num_bytes / (1024 * 1024):.1f}MB"
+
+
+def collect_memory_snapshot():
+    if psutil is None:
+        return None
+
+    process = psutil.Process(os.getpid())
     try:
-        await page.close()
-    except Exception:
-        pass
+        python_rss = process.memory_info().rss
+    except psutil.Error:
+        return None
+
+    child_rss = 0
     try:
-        await context.close()
-    except Exception:
+        for child in process.children(recursive=True):
+            try:
+                child_rss += child.memory_info().rss
+            except psutil.Error:
+                continue
+    except psutil.Error:
         pass
+
+    return {
+        "python_rss": python_rss,
+        "child_rss": child_rss,
+        "total_rss": python_rss + child_rss,
+    }
+
+
+def log_memory_usage(reason, check_count=None, browser_uptime_seconds=None):
+    snapshot = collect_memory_snapshot()
+    if snapshot is None:
+        return
+
+    details = [
+        f"python={format_megabytes(snapshot['python_rss'])}",
+        f"children={format_megabytes(snapshot['child_rss'])}",
+        f"total={format_megabytes(snapshot['total_rss'])}",
+    ]
+    if check_count is not None:
+        details.append(f"check={check_count}")
+    if browser_uptime_seconds is not None:
+        details.append(f"browser_uptime={int(browser_uptime_seconds)}s")
+
+    logger.info(f"[MEM] {reason} - " + " - ".join(details))
+
+
+async def close_browser(browser):
+    if browser is None:
+        return
+    try:
+        await browser.close()
+    except Exception as exc:
+        logger.warning(f"Failed to close browser cleanly: {exc}")
 
 
 async def persist_session_state(
-    context, target_url, check_interval, auth_file, browser_channel
+    context,
+    target_url,
+    check_interval,
+    browser_recycle_seconds,
+    auth_file,
+    browser_channel,
 ):
     auth_file = Path(auth_file)
     auth_file.parent.mkdir(parents=True, exist_ok=True)
@@ -655,38 +745,91 @@ async def persist_session_state(
         "; ".join(cookie_parts),
         target_url,
         check_interval,
+        browser_recycle_seconds,
         auth_file,
         browser_channel,
     )
 
 
+async def launch_browser(playwright_instance, headed, browser_channel):
+    launch_kwargs = {
+        "headless": not headed,
+        "args": build_browser_launch_args(),
+    }
+    if browser_channel and browser_channel != "chromium":
+        launch_kwargs["channel"] = browser_channel
+    return await playwright_instance.chromium.launch(**launch_kwargs)
+
+
+async def recycle_browser(
+    playwright_instance,
+    browser,
+    context,
+    page,
+    *,
+    cookie_str,
+    target_url,
+    check_interval,
+    browser_recycle_seconds,
+    headed,
+    auth_file,
+    browser_channel,
+    reason,
+    check_count,
+):
+    log_memory_usage(f"Before browser recycle ({reason})", check_count)
+    await persist_session_state(
+        context,
+        target_url,
+        check_interval,
+        browser_recycle_seconds,
+        auth_file,
+        browser_channel,
+    )
+    await close_session(context, page)
+    await close_browser(browser)
+
+    browser = await launch_browser(playwright_instance, headed, browser_channel)
+    context, page = await open_session(browser, cookie_str, auth_file)
+    _, _, _, _, activation_clicked = await open_and_prepare(
+        page,
+        target_url,
+        activation_reason=reason,
+        force_initial_activation=True,
+    )
+    log_memory_usage(f"After browser recycle ({reason})", check_count)
+    return browser, context, page, activation_clicked
+
+
 async def run_keep_alive(
-    cookie_str, target_url, check_interval, headed, auth_file, browser_channel
+    cookie_str,
+    target_url,
+    check_interval,
+    browser_recycle_seconds,
+    headed,
+    auth_file,
+    browser_channel,
 ):
     logger.info("=" * 55)
     logger.info("ModelScope Studio Keep-Alive Started (Playwright)")
     logger.info(f"  Target:   {target_url}")
     logger.info(f"  Mode:     {'headed' if headed else 'headless'}")
     logger.info(f"  Check:    Every {check_interval}s")
+    logger.info(f"  Recycle:  Every {browser_recycle_seconds}s")
     logger.info(f"  Auth:     {auth_file}")
     logger.info(f"  Browser:  {browser_channel}")
     logger.info(f"  Config:   {CONFIG_FILE}")
     logger.info("=" * 55)
 
     async with async_playwright() as p:
-        launch_kwargs = {
-            "headless": not headed,
-            "args": build_browser_launch_args(),
-        }
-        if browser_channel and browser_channel != "chromium":
-            launch_kwargs["channel"] = browser_channel
-        browser = await p.chromium.launch(**launch_kwargs)
+        browser = await launch_browser(p, headed, browser_channel)
 
         context, page = await open_session(browser, cookie_str, auth_file)
         config_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else None
         auth_mtime = auth_file.stat().st_mtime if auth_file.exists() else None
         check_count = 0
         last_activation_attempt_at = None
+        browser_started_at = asyncio.get_running_loop().time()
 
         try:
             response, title, ready_state, page_flags, activation_clicked = await open_and_prepare(
@@ -719,9 +862,15 @@ async def run_keep_alive(
                 return
 
             await persist_session_state(
-                context, target_url, check_interval, auth_file, browser_channel
+                context,
+                target_url,
+                check_interval,
+                browser_recycle_seconds,
+                auth_file,
+                browser_channel,
             )
             auth_mtime = auth_file.stat().st_mtime if auth_file.exists() else auth_mtime
+            log_memory_usage("After initial open", browser_uptime_seconds=0)
 
             while True:
                 await asyncio.sleep(check_interval)
@@ -733,6 +882,7 @@ async def run_keep_alive(
                     title, ready_state = await capture_state(page)
                     page_flags = await detect_page_flags(page)
                     now = asyncio.get_running_loop().time()
+                    browser_uptime_seconds = now - browser_started_at
 
                     if page_flags["activation_needed"]:
                         can_retry_activation = (
@@ -771,11 +921,52 @@ async def run_keep_alive(
                             f"[OK] Check #{check_count} - alive - Title: {title} - State: {ready_state}"
                         )
 
-                    await persist_session_state(
-                        context, target_url, check_interval, auth_file, browser_channel
+                    if check_count % STATE_PERSIST_EVERY_CHECKS == 0:
+                        await persist_session_state(
+                            context,
+                            target_url,
+                            check_interval,
+                            browser_recycle_seconds,
+                            auth_file,
+                            browser_channel,
+                        )
+                        auth_mtime = (
+                            auth_file.stat().st_mtime if auth_file.exists() else auth_mtime
+                        )
+
+                    log_memory_usage(
+                        "After check",
+                        check_count=check_count,
+                        browser_uptime_seconds=browser_uptime_seconds,
                     )
+
+                    if browser_uptime_seconds >= browser_recycle_seconds:
+                        logger.info(
+                            f"Browser uptime reached {int(browser_uptime_seconds)}s, recycling browser..."
+                        )
+                        browser, context, page, activation_clicked = await recycle_browser(
+                            p,
+                            browser,
+                            context,
+                            page,
+                            cookie_str=cookie_str,
+                            target_url=target_url,
+                            check_interval=check_interval,
+                            browser_recycle_seconds=browser_recycle_seconds,
+                            headed=headed,
+                            auth_file=auth_file,
+                            browser_channel=browser_channel,
+                            reason=f"scheduled recycle after check #{check_count}",
+                            check_count=check_count,
+                        )
+                        browser_started_at = asyncio.get_running_loop().time()
+                        if activation_clicked:
+                            last_activation_attempt_at = browser_started_at
+                        auth_mtime = auth_file.stat().st_mtime if auth_file.exists() else auth_mtime
+                        config_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else None
+                        continue
+
                     config_mtime = CONFIG_FILE.stat().st_mtime if CONFIG_FILE.exists() else None
-                    auth_mtime = auth_file.stat().st_mtime if auth_file.exists() else auth_mtime
 
                 except Exception as exc:
                     logger.error(f"[ERROR] Check #{check_count} - page interaction failed: {exc}")
@@ -796,6 +987,15 @@ async def run_keep_alive(
                     )
                     if activation_clicked:
                         last_activation_attempt_at = asyncio.get_running_loop().time()
+                    await persist_session_state(
+                        context,
+                        target_url,
+                        check_interval,
+                        browser_recycle_seconds,
+                        auth_file,
+                        browser_channel,
+                    )
+                    auth_mtime = auth_file.stat().st_mtime if auth_file.exists() else auth_mtime
 
                 if CONFIG_FILE.exists():
                     current_mtime = CONFIG_FILE.stat().st_mtime
@@ -807,6 +1007,13 @@ async def run_keep_alive(
                             new_target_url = (config.get("target_url") or target_url).strip()
                             new_interval = int(
                                 config.get("check_interval", check_interval) or check_interval
+                            )
+                            new_browser_recycle_seconds = int(
+                                config.get(
+                                    "browser_recycle_seconds",
+                                    browser_recycle_seconds,
+                                )
+                                or browser_recycle_seconds
                             )
                             new_auth_file = resolve_auth_file(config.get("auth_file"))
                             new_browser_channel = normalize_browser_channel(
@@ -836,6 +1043,13 @@ async def run_keep_alive(
                                     f"Check interval updated from config: {check_interval}s"
                                 )
 
+                            if new_browser_recycle_seconds != browser_recycle_seconds:
+                                browser_recycle_seconds = new_browser_recycle_seconds
+                                logger.info(
+                                    "Browser recycle interval updated from config: "
+                                    f"{browser_recycle_seconds}s"
+                                )
+
                             if new_browser_channel != browser_channel:
                                 browser_channel = new_browser_channel
                                 logger.warning(
@@ -863,6 +1077,7 @@ async def run_keep_alive(
                                     context,
                                     target_url,
                                     check_interval,
+                                    browser_recycle_seconds,
                                     auth_file,
                                     browser_channel,
                                 )
@@ -900,6 +1115,14 @@ async def run_keep_alive(
                         activation_reason="auth refresh",
                         force_initial_activation=True,
                     )
+                    await persist_session_state(
+                        context,
+                        target_url,
+                        check_interval,
+                        browser_recycle_seconds,
+                        auth_file,
+                        browser_channel,
+                    )
                     if activation_clicked:
                         last_activation_attempt_at = asyncio.get_running_loop().time()
 
@@ -911,7 +1134,7 @@ async def run_keep_alive(
             logger.info(f"  Total checks: {check_count}")
             logger.info("=" * 55)
             await close_session(context, page)
-            await browser.close()
+            await close_browser(browser)
 
 
 def main():
@@ -925,6 +1148,15 @@ def main():
         help=(
             "Status check interval in seconds "
             f"(default: from config or {DEFAULT_CHECK_INTERVAL})"
+        ),
+    )
+    parser.add_argument(
+        "--browser-recycle-seconds",
+        type=int,
+        default=None,
+        help=(
+            "Restart Chromium after this many seconds "
+            f"(default: from config or {DEFAULT_BROWSER_RECYCLE_SECONDS})"
         ),
     )
     parser.add_argument(
@@ -952,7 +1184,11 @@ def main():
     )
     args = parser.parse_args()
 
-    ensure_config_file(DEFAULT_URL, DEFAULT_CHECK_INTERVAL)
+    ensure_config_file(
+        DEFAULT_URL,
+        DEFAULT_CHECK_INTERVAL,
+        DEFAULT_BROWSER_RECYCLE_SECONDS,
+    )
     config = load_config_file() or default_config()
 
     target_url = (args.url or config.get("target_url") or DEFAULT_URL).strip()
@@ -960,13 +1196,23 @@ def main():
     check_interval = args.check_interval or int(
         config.get("check_interval", DEFAULT_CHECK_INTERVAL)
     )
+    browser_recycle_seconds = args.browser_recycle_seconds or int(
+        config.get("browser_recycle_seconds", DEFAULT_BROWSER_RECYCLE_SECONDS)
+    )
     auth_file = resolve_auth_file(args.auth_file or config.get("auth_file"))
     browser_channel = normalize_browser_channel(
         args.browser_channel or config.get("browser_channel")
     )
 
     bootstrap_playwright(browser_channel)
-    save_config_file(cookie_str, target_url, check_interval, auth_file, browser_channel)
+    save_config_file(
+        cookie_str,
+        target_url,
+        check_interval,
+        browser_recycle_seconds,
+        auth_file,
+        browser_channel,
+    )
     logger.info(f"Loaded config from {CONFIG_FILE}")
 
     asyncio.run(
@@ -974,6 +1220,7 @@ def main():
             cookie_str,
             target_url,
             check_interval,
+            browser_recycle_seconds,
             args.headed,
             auth_file,
             browser_channel,

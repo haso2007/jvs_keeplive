@@ -4,7 +4,13 @@ services:
     container_name: modelscope-keep-alive
     restart: unless-stopped
     init: true
+    mem_limit: 2g
     shm_size: "1gb"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       MODELSCOPE_STATE_DIR: /data
       TZ: Asia/Shanghai
@@ -15,3 +21,7 @@ services:
       - modelscope_keep_alive.py
       - --browser-channel
       - chromium
+      - --check-interval
+      - "7200"
+      - --browser-recycle-seconds
+      - "900"

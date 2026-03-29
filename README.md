@@ -63,6 +63,7 @@ copy modelscope_keep_alive.template.json modelscope_keep_alive.json
   "target_url": "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary",
   "cookies": "",
   "check_interval": 1800,
+  "browser_recycle_seconds": 43200,
   "auth_file": "modelscope_auth.json",
   "browser_channel": "msedge",
   "last_updated": ""
@@ -73,6 +74,7 @@ copy modelscope_keep_alive.template.json modelscope_keep_alive.json
 
 - `target_url`：要保活的创空间地址
 - `check_interval`：检查间隔，单位秒，默认 `1800`，也就是 30 分钟
+- `browser_recycle_seconds`：浏览器重启周期，单位秒，默认 `43200`，也就是 12 小时
 - `auth_file`：登录态文件，默认 `modelscope_auth.json`
 - `browser_channel`：Windows 推荐 `msedge`，Linux / Docker 推荐 `chromium`
 
@@ -182,6 +184,12 @@ python modelscope_keep_alive.py --check-interval 600
 python modelscope_keep_alive.py --check-interval 3600
 ```
 
+指定浏览器重启周期，例如每 12 小时重建一次 Chromium：
+
+```bash
+python modelscope_keep_alive.py --browser-recycle-seconds 43200
+```
+
 有头模式：
 
 ```bash
@@ -198,6 +206,8 @@ python modelscope_keep_alive.py --browser-channel chromium
 当前脚本行为：
 
 - 默认每 30 分钟检查一次。
+- 默认每 12 小时重建一次浏览器进程，用来抑制长时间运行后的内存累积。
+- 日志中会输出 Python 进程与 Chromium 子进程的内存占用，便于观察保活效果。
 - 巡检阶段不会每轮都重复点击 `运行` / `Open`。
 - 如果检测到“长时间未激活 / 正在重新部署 / 休眠 / 待运行”等提示，会尝试重新激活。
 - 首次打开页面时，如果页面上已经出现明显入口按钮，当前版本仍可能做一次激活尝试。
@@ -256,6 +266,12 @@ echo $!
 ```bash
 docker compose up -d --build
 ```
+
+当前 compose 默认增加了以下保护：
+
+- `mem_limit: 2g`，避免容器无限吃满宿主机内存
+- Docker 日志轮转：`10m x 3`
+- 当前 compose 启动参数附带 `--browser-recycle-seconds 900`，用于验证浏览器定时重建；验证通过后建议改回 `43200`
 
 查看日志：
 
