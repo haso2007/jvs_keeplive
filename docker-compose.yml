@@ -22,6 +22,6 @@ services:
       - --browser-channel
       - chromium
       - --check-interval
-      - "7200"
+      - "300"
       - --browser-recycle-seconds
       - "900"
