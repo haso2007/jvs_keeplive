@@ -4,11 +4,10 @@ services:
     container_name: modelscope-keep-alive
     restart: unless-stopped
     init: true
-    # Hard ceiling so the browser can't grow unbounded (the target page is heavy).
+    # Hard ceiling only; the script recycles at 900MB so steady state stays under 1GB.
     mem_limit: 1.5g
-    # Cap total CPU to one core. Lower it (e.g. 0.5) if the NAS is still busy.
     cpus: 1.0
-    shm_size: "256mb"
+    shm_size: "512m"
     pids_limit: 256
     logging:
       driver: json-file
@@ -18,7 +17,6 @@ services:
     environment:
       MODELSCOPE_STATE_DIR: /data
       TZ: Asia/Shanghai
-      # Recycle Chromium when its total RSS exceeds this many MB (before mem_limit).
       MODELSCOPE_RECYCLE_MEMORY_MB: "900"
     volumes:
       - ./nas-data:/data
@@ -29,6 +27,6 @@ services:
       - --browser-channel
       - chromium
       - --check-interval
-      - "300"
+      - "17500"
       - --browser-recycle-seconds
-      - "3600"
+      - "43200"

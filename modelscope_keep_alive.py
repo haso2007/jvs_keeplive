@@ -123,6 +123,7 @@ DEFAULT_BROWSER_RECYCLE_SECONDS = STATE_BROWSER_RECYCLE_SECONDS
 DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary"
 VIEWPORT_SIZE = {"width": 1024, "height": 768}
 MEMORY_RECYCLE_THRESHOLD_MB = int(os.environ.get("MODELSCOPE_RECYCLE_MEMORY_MB", "900"))
+MEMORY_MONITOR_INTERVAL_SECONDS = 60
 
 ENTRY_TEXTS = [
     "在线体验",
@@ -730,6 +731,20 @@ def log_memory_usage(reason, check_count=None, browser_uptime_seconds=None):
     logger.info(f"[MEM] {reason} - " + " - ".join(details))
 
 
+async def sleep_watching_memory(duration):
+    """Sleep in short steps so memory pressure is caught before the next full check."""
+    elapsed = 0.0
+    while elapsed < duration:
+        step = min(MEMORY_MONITOR_INTERVAL_SECONDS, duration - elapsed)
+        await asyncio.sleep(step)
+        elapsed += step
+        snapshot = collect_memory_snapshot()
+        if snapshot is not None and snapshot["total_rss"] >= (
+            MEMORY_RECYCLE_THRESHOLD_MB * 1024 * 1024
+        ):
+            return
+
+
 async def close_browser(browser):
     if browser is None:
         return
@@ -890,7 +905,7 @@ async def run_keep_alive(
             log_memory_usage("After initial open", browser_uptime_seconds=0)
 
             while True:
-                await asyncio.sleep(check_interval)
+                await sleep_watching_memory(check_interval)
                 check_count += 1
 
                 try:
