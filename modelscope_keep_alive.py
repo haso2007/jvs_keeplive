@@ -124,6 +124,13 @@ DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summ
 VIEWPORT_SIZE = {"width": 1024, "height": 768}
 MEMORY_RECYCLE_THRESHOLD_MB = int(os.environ.get("MODELSCOPE_RECYCLE_MEMORY_MB", "900"))
 MEMORY_MONITOR_INTERVAL_SECONDS = 60
+ACTIVATION_RETRY_COOLDOWN_SECONDS = 300
+COOKIE_DOMAIN = ".modelscope.cn"
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
 
 ENTRY_TEXTS = [
     "在线体验",
