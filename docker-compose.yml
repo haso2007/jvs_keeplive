@@ -6,7 +6,6 @@ services:
     init: true
     # Hard ceiling only; the script recycles at 900MB so steady state stays under 1GB.
     mem_limit: 1.5g
-    cpus: 1.0
     shm_size: "512m"
     pids_limit: 256
     logging:
