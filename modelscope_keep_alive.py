@@ -114,14 +114,15 @@ DEFAULT_AUTH_FILE = STATE_DIR / "modelscope_auth.json"
 DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary"
 DEFAULT_CHECK_INTERVAL = 1800
 DEFAULT_BROWSER_RECYCLE_SECONDS = 43200
-STATE_PERSIST_EVERY_CHECKS = 12
-ACTIVATION_RETRY_COOLDOWN_SECONDS = 300
-COOKIE_DOMAIN = ".modelscope.cn"
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
+STATE_PERSIST_EVERY_CHECKS = 3
+STATE_CHECK_INTERVAL = 300
+STATE_BROWSER_RECYCLE_SECONDS = 10800
+
+DEFAULT_CHECK_INTERVAL = STATE_CHECK_INTERVAL
+DEFAULT_BROWSER_RECYCLE_SECONDS = STATE_BROWSER_RECYCLE_SECONDS
+DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summary"
+VIEWPORT_SIZE = {"width": 1024, "height": 768}
+MEMORY_RECYCLE_THRESHOLD_MB = int(os.environ.get("MODELSCOPE_RECYCLE_MEMORY_MB", "900"))
 
 ENTRY_TEXTS = [
     "在线体验",
@@ -344,12 +345,28 @@ def build_browser_launch_args():
     launch_args = [
         "--disable-blink-features=AutomationControlled",
         "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-gpu",
+        "--disable-extensions",
+        "--disable-sync",
+        "--disable-translate",
+        "--disable-background-networking",
+        "--disable-component-update",
+        "--disable-client-side-phishing-detection",
+        "--disable-default-apps",
+        "--mute-audio",
+        "--renderer-process-limit=1",
+        "--js-flags=--max-old-space-size=512",
+        "--disk-cache-size=33554432",
+        "--media-cache-size=33554432",
     ]
     if sys.platform.startswith("linux"):
         launch_args.extend(
             [
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
+                "--no-zygote",
             ]
         )
     return launch_args
@@ -623,7 +640,7 @@ async def create_context(browser, cookie_str, auth_file):
     auth_file = Path(auth_file)
     context_kwargs = {
         "user_agent": USER_AGENT,
-        "viewport": {"width": 1440, "height": 900},
+        "viewport": VIEWPORT_SIZE,
         "locale": "zh-CN",
         "timezone_id": "Asia/Shanghai",
     }
@@ -940,10 +957,21 @@ async def run_keep_alive(
                         browser_uptime_seconds=browser_uptime_seconds,
                     )
 
+                    recycle_reason = None
                     if browser_uptime_seconds >= browser_recycle_seconds:
-                        logger.info(
-                            f"Browser uptime reached {int(browser_uptime_seconds)}s, recycling browser..."
-                        )
+                        recycle_reason = f"uptime reached {int(browser_uptime_seconds)}s"
+                    else:
+                        snapshot = collect_memory_snapshot()
+                        if snapshot is not None and snapshot["total_rss"] >= (
+                            MEMORY_RECYCLE_THRESHOLD_MB * 1024 * 1024
+                        ):
+                            recycle_reason = (
+                                f"memory exceeded {MEMORY_RECYCLE_THRESHOLD_MB}MB "
+                                f"({format_megabytes(snapshot['total_rss'])})"
+                            )
+
+                    if recycle_reason:
+                        logger.info(f"Recycling browser ({recycle_reason})...")
                         browser, context, page, activation_clicked = await recycle_browser(
                             p,
                             browser,
@@ -956,7 +984,7 @@ async def run_keep_alive(
                             headed=headed,
                             auth_file=auth_file,
                             browser_channel=browser_channel,
-                            reason=f"scheduled recycle after check #{check_count}",
+                            reason=f"recycle after check #{check_count} ({recycle_reason})",
                             check_count=check_count,
                         )
                         browser_started_at = asyncio.get_running_loop().time()
