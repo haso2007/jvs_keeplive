@@ -7,7 +7,6 @@ services:
     # Hard ceiling only; the script recycles at 900MB so steady state stays under 1GB.
     mem_limit: 1.5g
     shm_size: "512m"
-    pids_limit: 256
     logging:
       driver: json-file
       options:
