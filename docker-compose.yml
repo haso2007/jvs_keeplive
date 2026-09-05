@@ -4,8 +4,9 @@ services:
     container_name: modelscope-keep-alive
     restart: unless-stopped
     init: true
-    # Hard ceiling only; the script recycles at 900MB so steady state stays under 1GB.
-    mem_limit: 1.5g
+    # Hard ceiling only; the script recycles at 1200MB so Chromium restarts
+    # before the 2g cgroup limit, with headroom for NAS memory accounting.
+    mem_limit: 2g
     shm_size: "512m"
     logging:
       driver: json-file
@@ -15,7 +16,7 @@ services:
     environment:
       MODELSCOPE_STATE_DIR: /data
       TZ: Asia/Shanghai
-      MODELSCOPE_RECYCLE_MEMORY_MB: "900"
+      MODELSCOPE_RECYCLE_MEMORY_MB: "1200"
     volumes:
       - ./nas-data:/data
       - ./modelscope_keep_alive.py:/app/modelscope_keep_alive.py:ro

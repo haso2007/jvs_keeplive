@@ -273,6 +273,7 @@ docker compose up -d --build
 当前 compose 默认增加了以下保护：
 
 - `mem_limit: 2g`，避免容器无限吃满宿主机内存
+- `MODELSCOPE_RECYCLE_MEMORY_MB=1200`，在触达 2g 上限前主动重建 Chromium
 - Docker 日志轮转：`10m x 3`
 - 当前测试参数是 `--check-interval 300` 与 `--browser-recycle-seconds 900`，用于更快验证巡检与浏览器定时重建是否正常
 - 另外通过 `./modelscope_keep_alive.py:/app/modelscope_keep_alive.py:ro` 把宿主机脚本直接挂载进容器，便于 NAS 上快速验证脚本改动而不必每次重建大镜像

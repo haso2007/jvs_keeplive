@@ -124,6 +124,8 @@ DEFAULT_URL = "https://www.modelscope.cn/studios/haso2007/openclaw_computer/summ
 VIEWPORT_SIZE = {"width": 1024, "height": 768}
 MEMORY_RECYCLE_THRESHOLD_MB = int(os.environ.get("MODELSCOPE_RECYCLE_MEMORY_MB", "900"))
 MEMORY_MONITOR_INTERVAL_SECONDS = 60
+PERSIST_TIMEOUT_SECONDS = 60
+CLOSE_TIMEOUT_SECONDS = 20
 ACTIVATION_RETRY_COOLDOWN_SECONDS = 300
 COOKIE_DOMAIN = ".modelscope.cn"
 USER_AGENT = (
@@ -677,16 +679,20 @@ async def open_session(browser, cookie_str, auth_file):
 
 
 async def close_session(context, page):
-    if page is not None:
-        try:
+    async def _close():
+        if page is not None:
             await page.close()
-        except Exception as exc:
-            logger.warning(f"Failed to close page cleanly: {exc}")
-    if context is not None:
-        try:
+        if context is not None:
             await context.close()
-        except Exception as exc:
-            logger.warning(f"Failed to close browser context cleanly: {exc}")
+
+    try:
+        await asyncio.wait_for(_close(), timeout=CLOSE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"Timed out after {CLOSE_TIMEOUT_SECONDS}s while closing browser session"
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to close browser session cleanly: {exc}")
 
 
 def format_megabytes(num_bytes):
@@ -756,7 +762,11 @@ async def close_browser(browser):
     if browser is None:
         return
     try:
-        await browser.close()
+        await asyncio.wait_for(browser.close(), timeout=CLOSE_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"Timed out after {CLOSE_TIMEOUT_SECONDS}s while closing browser"
+        )
     except Exception as exc:
         logger.warning(f"Failed to close browser cleanly: {exc}")
 
@@ -769,25 +779,40 @@ async def persist_session_state(
     auth_file,
     browser_channel,
 ):
-    auth_file = Path(auth_file)
-    auth_file.parent.mkdir(parents=True, exist_ok=True)
+    """Best-effort session snapshot. Never block the keep-alive loop indefinitely."""
 
-    browser_cookies = await context.cookies()
-    cookie_parts = [
-        f"{cookie['name']}={cookie['value']}"
-        for cookie in browser_cookies
-        if COOKIE_DOMAIN.lstrip(".") in cookie.get("domain", "")
-    ]
+    async def _write():
+        auth_path = Path(auth_file)
+        auth_path.parent.mkdir(parents=True, exist_ok=True)
 
-    await context.storage_state(path=str(auth_file))
-    save_config_file(
-        "; ".join(cookie_parts),
-        target_url,
-        check_interval,
-        browser_recycle_seconds,
-        auth_file,
-        browser_channel,
-    )
+        browser_cookies = await context.cookies()
+        cookie_parts = [
+            f"{cookie['name']}={cookie['value']}"
+            for cookie in browser_cookies
+            if COOKIE_DOMAIN.lstrip(".") in cookie.get("domain", "")
+        ]
+
+        await context.storage_state(path=str(auth_path))
+        save_config_file(
+            "; ".join(cookie_parts),
+            target_url,
+            check_interval,
+            browser_recycle_seconds,
+            auth_path,
+            browser_channel,
+        )
+
+    try:
+        await asyncio.wait_for(_write(), timeout=PERSIST_TIMEOUT_SECONDS)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"Timed out after {PERSIST_TIMEOUT_SECONDS}s while persisting session state"
+        )
+        return False
+    except Exception as exc:
+        logger.warning(f"Failed to persist session state: {exc}")
+        return False
 
 
 async def launch_browser(playwright_instance, headed, browser_channel):
@@ -817,7 +842,7 @@ async def recycle_browser(
     check_count,
 ):
     log_memory_usage(f"Before browser recycle ({reason})", check_count)
-    await persist_session_state(
+    persisted = await persist_session_state(
         context,
         target_url,
         check_interval,
@@ -825,6 +850,8 @@ async def recycle_browser(
         auth_file,
         browser_channel,
     )
+    if not persisted:
+        logger.warning("Continuing browser recycle without a fresh session snapshot")
     await close_session(context, page)
     await close_browser(browser)
 
@@ -858,7 +885,10 @@ async def run_keep_alive(
     logger.info(f"  Auth:     {auth_file}")
     logger.info(f"  Browser:  {browser_channel}")
     logger.info(f"  Config:   {CONFIG_FILE}")
+    logger.info(f"  Memory:   recycle at {MEMORY_RECYCLE_THRESHOLD_MB}MB")
     logger.info("=" * 55)
+    if psutil is None:
+        logger.warning("psutil is not available; memory-based browser recycle is disabled")
 
     async with async_playwright() as p:
         browser = await launch_browser(p, headed, browser_channel)
@@ -960,19 +990,6 @@ async def run_keep_alive(
                             f"[OK] Check #{check_count} - alive - Title: {title} - State: {ready_state}"
                         )
 
-                    if check_count % STATE_PERSIST_EVERY_CHECKS == 0:
-                        await persist_session_state(
-                            context,
-                            target_url,
-                            check_interval,
-                            browser_recycle_seconds,
-                            auth_file,
-                            browser_channel,
-                        )
-                        auth_mtime = (
-                            auth_file.stat().st_mtime if auth_file.exists() else auth_mtime
-                        )
-
                     log_memory_usage(
                         "After check",
                         check_count=check_count,
@@ -991,6 +1008,24 @@ async def run_keep_alive(
                                 f"memory exceeded {MEMORY_RECYCLE_THRESHOLD_MB}MB "
                                 f"({format_megabytes(snapshot['total_rss'])})"
                             )
+
+                    # Recycle first when due; periodic persist on a long-lived
+                    # Chromium has been observed to hang and skip recycle entirely.
+                    if recycle_reason is None and check_count % STATE_PERSIST_EVERY_CHECKS == 0:
+                        persisted = await persist_session_state(
+                            context,
+                            target_url,
+                            check_interval,
+                            browser_recycle_seconds,
+                            auth_file,
+                            browser_channel,
+                        )
+                        if persisted:
+                            auth_mtime = (
+                                auth_file.stat().st_mtime if auth_file.exists() else auth_mtime
+                            )
+                        else:
+                            recycle_reason = "session persist failed"
 
                     if recycle_reason:
                         logger.info(f"Recycling browser ({recycle_reason})...")
