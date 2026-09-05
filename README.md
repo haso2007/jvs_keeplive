@@ -275,15 +275,11 @@ docker compose up -d --build
 - `mem_limit: 2g`，避免容器无限吃满宿主机内存
 - `MODELSCOPE_RECYCLE_MEMORY_MB=1200`，在触达 2g 上限前主动重建 Chromium
 - Docker 日志轮转：`10m x 3`
-- 当前测试参数是 `--check-interval 300` 与 `--browser-recycle-seconds 900`，用于更快验证巡检与浏览器定时重建是否正常
+- 生产默认是 `--check-interval 18000`（5 小时激活一次）与 `--browser-recycle-seconds 43200`（12 小时重建浏览器）
 - 另外通过 `./modelscope_keep_alive.py:/app/modelscope_keep_alive.py:ro` 把宿主机脚本直接挂载进容器，便于 NAS 上快速验证脚本改动而不必每次重建大镜像
 
 注意：
 
-- 上面这组 `300 / 900` 是测试值，不建议直接作为长期生产部署参数。
-- 真正长期部署时，请根据自己的需求改回更合适的值，例如：
-  - `--check-interval 1800` 或 `7200`
-  - `--browser-recycle-seconds 43200`
 - 如果你只是修改了 `modelscope_keep_alive.py`，当前 compose 的脚本挂载方式可以让 `docker compose up -d --force-recreate` 直接加载新脚本，不必重新构建镜像。
 - 如果你修改了 `requirements.txt`、`Dockerfile`，或需要让镜像内也包含这些最新改动，仍然需要重新构建镜像。
 

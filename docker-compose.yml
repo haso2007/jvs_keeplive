@@ -25,7 +25,8 @@ services:
       - modelscope_keep_alive.py
       - --browser-channel
       - chromium
+      # 5h keep-alive ping; 12h Chromium recycle.
       - --check-interval
-      - "17500"
+      - "18000"
       - --browser-recycle-seconds
       - "43200"
